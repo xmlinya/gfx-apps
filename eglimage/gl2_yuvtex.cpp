@@ -21,6 +21,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 #include <sched.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -28,6 +29,208 @@
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
+
+#include <xf86drm.h>
+#include <xf86drmMode.h>
+#include <gbm.h>
+
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+#define MAX_DISPLAYS 	(4)
+uint8_t DISP_ID = 0;
+uint8_t all_display = 0;
+int8_t connector_id = -1;
+
+static struct {
+	EGLDisplay display;
+	EGLConfig config;
+	EGLContext context;
+	EGLSurface surface;
+	GLuint program;
+	GLint modelviewmatrix, modelviewprojectionmatrix, normalmatrix;
+	GLuint vbo;
+	GLuint positionsoffset, colorsoffset, normalsoffset;
+	GLuint vertex_shader, fragment_shader;
+} gl;
+
+static struct {
+	struct gbm_device *dev;
+	struct gbm_surface *surface;
+} gbm;
+
+static struct {
+	int fd;
+	uint32_t ndisp;
+	uint32_t crtc_id[MAX_DISPLAYS];
+	uint32_t connector_id[MAX_DISPLAYS];
+	uint32_t resource_id;
+	uint32_t encoder[MAX_DISPLAYS];
+	drmModeModeInfo *mode[MAX_DISPLAYS];
+	drmModeConnector *connectors[MAX_DISPLAYS];
+} drm;
+
+struct drm_fb {
+	struct gbm_bo *bo;
+	uint32_t fb_id;
+};
+
+static int init_drm(void)
+{
+	static const char *modules[] = {
+			"omapdrm", "i915", "radeon", "nouveau", "vmwgfx", "exynos"
+	};
+	drmModeRes *resources;
+	drmModeConnector *connector = NULL;
+	drmModeEncoder *encoder = NULL;
+	int i, j;
+	uint32_t maxRes, curRes;
+
+	for (i = 0; i < ARRAY_SIZE(modules); i++) {
+		printf("trying to load module %s...", modules[i]);
+		drm.fd = drmOpen(modules[i], NULL);
+		if (drm.fd < 0) {
+			printf("failed.\n");
+		} else {
+			printf("success.\n");
+			break;
+		}
+	}
+
+	if (drm.fd < 0) {
+		printf("could not open drm device\n");
+		return -1;
+	}
+
+	resources = drmModeGetResources(drm.fd);
+	if (!resources) {
+		printf("drmModeGetResources failed: %s\n", strerror(errno));
+		return -1;
+	}
+	drm.resource_id = (uint32_t) resources;
+
+	/* find a connected connector: */
+	for (int i = 0; i < resources->count_connectors; i++) {
+		connector = drmModeGetConnector(drm.fd, resources->connectors[i]);
+		if (connector->connection == DRM_MODE_CONNECTED) {
+			/* choose the first supported mode */
+			drm.mode[drm.ndisp] = &connector->modes[0];
+			drm.connector_id[drm.ndisp] = connector->connector_id;
+
+			for (j=0; j<resources->count_encoders; j++) {
+				encoder = drmModeGetEncoder(drm.fd, resources->encoders[j]);
+				if (encoder->encoder_id == connector->encoder_id)
+					break;
+
+				drmModeFreeEncoder(encoder);
+				encoder = NULL;
+			}
+
+			if (!encoder) {
+				printf("no encoder!\n");
+				return -1;
+			}
+
+			drm.encoder[drm.ndisp]  = (uint32_t) encoder;
+			drm.crtc_id[drm.ndisp] = encoder->crtc_id;
+			drm.connectors[drm.ndisp] = connector;
+
+			printf("### Display [%d]: CRTC = %d, Connector = %d\n", drm.ndisp, drm.crtc_id[drm.ndisp], drm.connector_id[drm.ndisp]);
+			printf("\tMode chosen [%s] : Clock => %d, Vertical refresh => %d, Type => %d\n", drm.mode[drm.ndisp]->name, drm.mode[drm.ndisp]->clock, drm.mode[drm.ndisp]->vrefresh, drm.mode[drm.ndisp]->type);
+			printf("\tHorizontal => %d, %d, %d, %d, %d\n", drm.mode[drm.ndisp]->hdisplay, drm.mode[drm.ndisp]->hsync_start, drm.mode[drm.ndisp]->hsync_end, drm.mode[drm.ndisp]->htotal, drm.mode[drm.ndisp]->hskew);
+			printf("\tVertical => %d, %d, %d, %d, %d\n", drm.mode[drm.ndisp]->vdisplay, drm.mode[drm.ndisp]->vsync_start, drm.mode[drm.ndisp]->vsync_end, drm.mode[drm.ndisp]->vtotal, drm.mode[drm.ndisp]->vscan);
+
+			/* If a connector_id is specified, use the corresponding display */
+			if ((connector_id != -1) && (connector_id == drm.connector_id[drm.ndisp]))
+				DISP_ID = drm.ndisp;
+
+			/* If all displays are enabled, choose the connector with maximum
+			* resolution as the primary display */
+			if (all_display) {
+				maxRes = drm.mode[DISP_ID]->vdisplay * drm.mode[DISP_ID]->hdisplay;
+				curRes = drm.mode[drm.ndisp]->vdisplay * drm.mode[drm.ndisp]->hdisplay;
+
+				if (curRes > maxRes)
+					DISP_ID = drm.ndisp;
+			}
+
+			drm.ndisp++;
+		} else {
+			drmModeFreeConnector(connector);
+		}
+	}
+
+	if (drm.ndisp == 0) {
+		/* we could be fancy and listen for hotplug events and wait for
+		 * a connector..
+		 */
+		printf("no connected connector!\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int init_gbm(void)
+{
+	gbm.dev = gbm_create_device(drm.fd);
+
+	gbm.surface = gbm_surface_create(gbm.dev,
+			drm.mode[DISP_ID]->hdisplay, drm.mode[DISP_ID]->vdisplay,
+			GBM_FORMAT_XRGB8888,
+			GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+	if (!gbm.surface) {
+		printf("failed to create gbm surface\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static void
+drm_fb_destroy_callback(struct gbm_bo *bo, void *data)
+{
+	struct drm_fb *fb = (struct drm_fb *)data;
+
+	if (fb->fb_id)
+		drmModeRmFB(drm.fd, fb->fb_id);
+
+	free(fb);
+}
+
+static struct drm_fb * drm_fb_get_from_bo(struct gbm_bo *bo)
+{
+	struct drm_fb *fb = (struct drm_fb *)gbm_bo_get_user_data(bo);
+	uint32_t width, height, stride, handle;
+	int ret;
+
+	if (fb)
+		return fb;
+
+	fb = (struct drm_fb *)calloc(1, sizeof *fb);
+	fb->bo = bo;
+
+	width = gbm_bo_get_width(bo);
+	height = gbm_bo_get_height(bo);
+	stride = gbm_bo_get_stride(bo);
+	handle = gbm_bo_get_handle(bo).u32;
+
+	ret = drmModeAddFB(drm.fd, width, height, 24, 32, stride, handle, &fb->fb_id);
+	if (ret) {
+		printf("failed to create fb: %s\n", strerror(errno));
+		free(fb);
+		return NULL;
+	}
+
+	gbm_bo_set_user_data(bo, fb, drm_fb_destroy_callback);
+
+	return fb;
+}
+
+static void page_flip_handler(int fd, unsigned int frame,
+		  unsigned int sec, unsigned int usec, void *data)
+{
+	int *waiting_for_flip = (int *)data;
+	*waiting_for_flip = 0;
+}
 
 static void printGLString(const char *name, GLenum s) {
 	// fprintf(stderr, "printGLString %s, %d\n", name, s);
@@ -213,7 +416,7 @@ extern "C" {
 
 static void fill420(unsigned char *y, unsigned char *u, unsigned char *v,
 		int cs /*chroma pixel stride */,
-		int n, int width, int height, int stride)
+		int n, int width, int height, int stride, unsigned int rgbvalue)
 {
 	int i, j;
 
@@ -227,6 +430,10 @@ static void fill420(unsigned char *y, unsigned char *u, unsigned char *v,
 		for (i = 0; i < width; i+=2) {
 			div_t d = div(n+i+j, width);
 			uint32_t rgb = 0x00130502 * (d.quot >> 6) + 0x000a1120 * (d.rem >> 6);
+
+			if (rgbvalue != 0)
+				rgb = rgbvalue;
+
 			unsigned char *rgbp = (unsigned char *)&rgb;
 			unsigned char y = (0.299 * rgbp[RED]) + (0.587 * rgbp[GREEN]) + (0.114 * rgbp[BLUE]);
 
@@ -252,8 +459,17 @@ extern "C" {
 }
 #endif
 
+void setupYuvBuffer(unsigned char *buf, unsigned int rgbvalue)
+{
+    unsigned char *y = buf;
+    unsigned char *u = y + (VID_HEIGHT * VID_WIDTH);
+    unsigned char *v = u + 1;
 
-bool setupYuvTexSurface(EGLDisplay dpy, EGLContext context) {
+    fill420(y, u, v, 2, 0, VID_WIDTH, VID_HEIGHT, VID_WIDTH, rgbvalue);
+}
+
+
+bool setupYuvTexSurface(EGLDisplay dpy, EGLContext context, unsigned char *ptr) {
     EGLint attr[] = {
             EGL_GL_VIDEO_FOURCC_TI,      FOURCC_STR("NV12"),
             EGL_GL_VIDEO_WIDTH_TI,       VID_WIDTH,
@@ -265,22 +481,6 @@ bool setupYuvTexSurface(EGLDisplay dpy, EGLContext context) {
             EGLIMAGE_FLAGS_YUV_BT601,
             EGL_NONE
     };
-#ifdef USE_TILER
-    MemAllocBlock block;
-    memset(&block, 0, sizeof(block));
-    block.pixelFormat = PIXEL_FMT_PAGE;
-    block.dim.len = VID_SIZE;
-    unsigned char *ptr = (unsigned char *)MemMgr_Alloc (&block, 1);
-#else
-    unsigned char *ptr = (unsigned char *)malloc(VID_SIZE + PAGE_SIZE);
-    ptr = (unsigned char *)((uint32_t)ptr & ~(PAGE_SIZE - 1));
-#endif
-    unsigned char *y = ptr;
-    // XXX deal with multiple bo case
-    unsigned char *u = y + (VID_HEIGHT * VID_WIDTH);
-    unsigned char *v = u + 1;
-
-    fill420(y, u, v, 2, 0, VID_WIDTH, VID_HEIGHT, VID_WIDTH);
 
     PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR =
             (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
@@ -315,7 +515,7 @@ const GLfloat gTriangleVertices[] = {
 };
 
 void renderFrame() {
-	glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+	glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
 	checkGlError("glClearColor");
 	glClear( GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
 	checkGlError("glClear");
@@ -391,14 +591,14 @@ void printEGLConfiguration(EGLDisplay dpy, EGLConfig config) {
 	printf("\n");
 }
 
+#define NUM_BUFS (3)
+
 int main(int argc, char** argv) {
 	static const EGLint attribs[] = {
-#if 0
 			EGL_RED_SIZE, 1,
 			EGL_GREEN_SIZE, 1,
 			EGL_BLUE_SIZE, 1,
-			EGL_DEPTH_SIZE, 1,
-#endif
+			EGL_ALPHA_SIZE, 0,
 			EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
 			EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
 			EGL_NONE
@@ -413,15 +613,41 @@ int main(int argc, char** argv) {
 	EGLint w, h;
 
 	EGLDisplay edpy;
-	Display *xdpy;
-	Window xwin;
 
+	fd_set fds;
+	drmEventContext evctx;
+	evctx.version = DRM_EVENT_CONTEXT_VERSION;
+	evctx.page_flip_handler = page_flip_handler;
+
+	struct gbm_bo *bo;
+	struct drm_fb *fb;
 	int ret;
 
-    xdpy = XOpenDisplay(NULL);
+	unsigned char *buf = (unsigned char *)malloc(VID_SIZE + PAGE_SIZE);
+	buf = (unsigned char *)((uint32_t)buf & ~(PAGE_SIZE - 1));
+
+	setupYuvBuffer(buf, 0x0000FF);
+
+	ret = init_drm();
+	if (ret) {
+		printf("failed to initialize DRM\n");
+		return ret;
+	}
+	printf("### Primary display => ConnectorId = %d, Resolution = %dx%d\n",
+			drm.connector_id[DISP_ID], drm.mode[DISP_ID]->hdisplay,
+			drm.mode[DISP_ID]->vdisplay);
+
+	FD_ZERO(&fds);
+	FD_SET(drm.fd, &fds);
+
+	ret = init_gbm();
+	if (ret) {
+		printf("failed to initialize GBM\n");
+		return ret;
+	}
 
 	checkEglError("<init>");
-	edpy = eglGetDisplay((EGLNativeDisplayType)xdpy);
+	edpy = eglGetDisplay((EGLNativeDisplayType)gbm.dev);
 	checkEglError("eglGetDisplay");
 	if (edpy == EGL_NO_DISPLAY) {
 		printf("eglGetDisplay returned EGL_NO_DISPLAY.\n");
@@ -441,13 +667,8 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 
-    xwin = XCreateSimpleWindow(xdpy, RootWindow(xdpy, 0), 1, 1,
-    		WIN_WIDTH, WIN_HEIGHT, 0, BlackPixel (xdpy, 0),
-    		BlackPixel(xdpy, 0));
-    XMapWindow(xdpy, xwin);
-    XFlush(xdpy);
-
-    surface = eglCreateWindowSurface(edpy, config, (EGLNativeWindowType)xwin, NULL);
+    surface = eglCreateWindowSurface(edpy, config,
+		    (EGLNativeWindowType)gbm.surface, NULL);
 	checkEglError("eglCreateWindowSurface");
 	if (surface == EGL_NO_SURFACE) {
 		printf("gelCreateWindowSurface failed.\n");
@@ -472,7 +693,6 @@ int main(int argc, char** argv) {
 	checkEglError("eglQuerySurface");
 	eglQuerySurface(edpy, surface, EGL_HEIGHT, &h);
 	checkEglError("eglQuerySurface");
-	GLint dim = w < h ? w : h;
 
 	fprintf(stderr, "Window dimensions: %d x %d\n", w, h);
 
@@ -481,7 +701,7 @@ int main(int argc, char** argv) {
 	printGLString("Renderer", GL_RENDERER);
 	printGLString("Extensions", GL_EXTENSIONS);
 
-	if(!setupYuvTexSurface(edpy, context)) {
+	if(!setupYuvTexSurface(edpy, context, buf)) {
 		fprintf(stderr, "Could not set up texture surface.\n");
 		return 1;
 	}
@@ -491,10 +711,60 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
+	/* clear the color buffer */
+	glClearColor(0.5, 0.5, 0.5, 1.0);
+	glClear(GL_COLOR_BUFFER_BIT);
+	eglSwapBuffers(gl.display, gl.surface);
+	bo = gbm_surface_lock_front_buffer(gbm.surface);
+	fb = drm_fb_get_from_bo(bo);
+
+	ret = drmModeSetCrtc(drm.fd, drm.crtc_id[DISP_ID], fb->fb_id,
+			0, 0, &drm.connector_id[DISP_ID], 1, drm.mode[DISP_ID]);
+	if (ret) {
+		printf("display %d failed to set mode: %s\n", DISP_ID, strerror(errno));
+		return ret;
+	}
+
 	for (;;) {
+		struct gbm_bo *next_bo;
+		int waiting_for_flip = 1;
+
 		renderFrame();
 		eglSwapBuffers(edpy, surface);
 		checkEglError("eglSwapBuffers");
+
+		next_bo = gbm_surface_lock_front_buffer(gbm.surface);
+		fb = drm_fb_get_from_bo(next_bo);
+
+		/*
+		 * Here you could also update drm plane layers if you want
+		 * hw composition
+		 */
+
+		ret = drmModePageFlip(drm.fd, drm.crtc_id[DISP_ID], fb->fb_id,
+				DRM_MODE_PAGE_FLIP_EVENT, &waiting_for_flip);
+		if (ret) {
+			printf("failed to queue page flip: %s\n", strerror(errno));
+			return -1;
+		}
+
+		while (waiting_for_flip) {
+			ret = select(drm.fd + 1, &fds, NULL, NULL, NULL);
+			if (ret < 0) {
+				printf("select err: %s\n", strerror(errno));
+				return ret;
+			} else if (ret == 0) {
+				printf("select timeout!\n");
+				return -1;
+			} else if (FD_ISSET(0, &fds)) {
+				continue;
+			}
+			drmHandleEvent(drm.fd, &evctx);
+		}
+
+		/* release last buffer to render on again: */
+		gbm_surface_release_buffer(gbm.surface, bo);
+		bo = next_bo;
 	}
 
 	return 0;

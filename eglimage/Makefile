@@ -1,14 +1,28 @@
-# Replace below variables with the paths for graphics SDK as on your system
-GRAPHICS_SDK_BASE = /home/user/Graphics_SDK_4_06_00_01
-GRAPHICS_SDK_XORG_BASE = $(GRAPHICS_SDK_BASE)/targetfs/XSGX
-TOOLCHAIN_PATH = /opt/toolchain/arago/arago-2011.09-static-armv7a-linux-gnueabi-sdk-latest/arago-2011.09/armv7a/bin
-CROSS_COMPILE = $(TOOLCHAIN_PATH)/arm-arago-linux-gnueabi-g++
-#By default the setting below(gfx_rel_es5.x) is for DM/AM37xx EVM. Replace this with your device.
-#You can get details on what library version to use below for your device by doing make help with graphics SDK build(Makefile) & not with this makefile
-GRAPHICS_DEVICE_LIB = gfx_rel_es5.x
+# Makefile
 
-gl2_yuvtex: gl2_yuvtex.cpp
-	$(CROSS_COMPILE)  -g -o gl2_yuvtex -I$(GRAPHICS_SDK_XORG_BASE)/include -I$(GRAPHICS_SDK_BASE)/include/OGLES2 gl2_yuvtex.cpp -L$(GRAPHICS_SDK_BASE)/$(GRAPHICS_DEVICE_LIB) -Wl,--rpath-link,$(GRAPHICS_SDK_BASE)/$(GRAPHICS_DEVICE_LIB):$(GRAPHICS_SDK_XORG_BASE)/lib -lEGL -lGLESv2 -L$(GRAPHICS_SDK_XORG_BASE)/lib -lX11
+# Set the target filesystem directory
+CROSS_COMPILE=arm-linux-gnueabihf-
+FSDIR=/home1/anand/targetfs/ti-glsdk_dra7xx-evm_6_04_00_02
+
+## No need to change below this
+
+COMMON_INCLUDES = -I$(FSDIR)/usr/include/libdrm -I$(FSDIR)/usr/include -I./include/gbm
+COMMON_LFLAGS = -L$(FSDIR)/usr/lib -Wl,--rpath-link,$(FSDIR)/usr/lib -L$(FSDIR)/lib -Wl,--rpath-link,$(FSDIR)/lib
+
+PLAT_CPP = $(CROSS_COMPILE)g++
+
+PLAT_CFLAGS   = $(COMMON_INCLUDES) -Wall -O2
+PLAT_LINK =  $(COMMON_LFLAGS) -lEGL -lGLESv2 -lgbm -ldrm
+
+SRCNAME = $(wildcard *.c)
+SRCNAME += $(wildcard *.cpp)
+OBJECTS = $(SRCNAME:.c=.o)
+OBJECTS += $(SRCNAME:.cpp=.o)
+
+OUTNAME = eglimage_sample
+
+$(OUTNAME): $(SRCNAME)
+	$(PLAT_CPP) -o $@ $^ $(PLAT_CFLAGS) $(LINK) $(PLAT_LINK)
 
 clean:
-	rm -rf gl2_yuvtex
+	rm $(OUTNAME)
