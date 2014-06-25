@@ -267,9 +267,10 @@ static void checkGlError(const char* op) {
 
 static const char gVertexShader[] =
         "attribute vec4 vPosition;\n"
+	"attribute vec2 texCoords;\n"
 		"varying vec2 yuvTexCoords;\n"
 		"void main() {\n"
-		"  yuvTexCoords = vPosition.xy + vec2(0.5, 0.5);\n"
+		"  yuvTexCoords = texCoords;\n"
 		"  gl_Position = vPosition;\n"
 		"}\n";
 
@@ -357,6 +358,7 @@ GLuint createProgram(const char* pVertexSource, const char* pFragmentSource) {
 
 GLuint gProgram;
 GLint gvPositionHandle;
+GLint gvTexHandle;
 GLint gYuvTexSamplerHandle;
 
 bool setupGraphics(int w, int h) {
@@ -368,6 +370,12 @@ bool setupGraphics(int w, int h) {
 	checkGlError("glGetAttribLocation");
 	fprintf(stderr, "glGetAttribLocation(\"vPosition\") = %d\n",
 			gvPositionHandle);
+
+	gvTexHandle = glGetAttribLocation(gProgram, "texCoords");
+	checkGlError("glGetAttribLocation");
+	fprintf(stderr, "glGetAttribLocation(\"texCoords\") = %d\n",
+			gvTexHandle);
+
 	gYuvTexSamplerHandle = glGetUniformLocation(gProgram, "yuvTexSampler");
 	checkGlError("glGetUniformLocation");
 	fprintf(stderr, "glGetUniformLocation(\"yuvTexSampler\") = %d\n",
@@ -523,10 +531,16 @@ bool setupYuvTexSurface(EGLDisplay dpy, EGLContext context, unsigned char *ptr) 
 }
 
 const GLfloat gTriangleVertices[] = {
-		-0.5f, 0.5f,
-		-0.5f, -0.5f,
-		0.5f, -0.5f,
-		0.5f, 0.5f,
+		-1.0f, 1.0f, 0.0f,
+		-1.0f, -1.0f, 0.0f,
+		1.0f, -1.0f, 0.0f,
+		1.0f, 1.0f, 0.0f
+};
+const GLfloat gTexCoords[] = {
+		0.0f, 1.0f,
+		0.0f, 0.0f,
+		1.0f, 0.0f,
+		1.0f, 1.0f,
 };
 
 void renderFrame() {
@@ -538,9 +552,14 @@ void renderFrame() {
 	glUseProgram(gProgram);
 	checkGlError("glUseProgram");
 
-	glVertexAttribPointer(gvPositionHandle, 2, GL_FLOAT, GL_FALSE, 0, gTriangleVertices);
+	glVertexAttribPointer(gvPositionHandle, 3, GL_FLOAT, GL_FALSE, 0, gTriangleVertices);
 	checkGlError("glVertexAttribPointer");
 	glEnableVertexAttribArray(gvPositionHandle);
+	checkGlError("glEnableVertexAttribArray");
+
+	glVertexAttribPointer(gvTexHandle, 2, GL_FLOAT, GL_FALSE, 0, gTexCoords);
+	checkGlError("glVertexAttribPointer");
+	glEnableVertexAttribArray(gvTexHandle);
 	checkGlError("glEnableVertexAttribArray");
 
 	glUniform1i(gYuvTexSamplerHandle, 0);
