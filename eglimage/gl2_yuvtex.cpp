@@ -40,6 +40,10 @@ uint8_t DISP_ID = 0;
 uint8_t all_display = 0;
 int8_t connector_id = -1;
 
+int VID_WIDTH=1024;
+int VID_HEIGHT=1024;
+int VID_SIZE;
+
 static struct {
 	EGLDisplay display;
 	EGLConfig config;
@@ -385,9 +389,6 @@ static GLuint yuvTex;
 
 #define WIN_WIDTH  500
 #define WIN_HEIGHT 500
-#define VID_WIDTH  1024
-#define VID_HEIGHT 1024
-#define VID_SIZE   (VID_WIDTH * VID_HEIGHT * 3) / 2
 #define PAGE_SIZE  4096
 
 #ifndef EGL_TI_raw_video
@@ -459,13 +460,27 @@ extern "C" {
 }
 #endif
 
-void setupYuvBuffer(unsigned char *buf, unsigned int rgbvalue)
+void setupYuvBuffer(unsigned char *buf, char *file, unsigned int rgbvalue)
 {
     unsigned char *y = buf;
     unsigned char *u = y + (VID_HEIGHT * VID_WIDTH);
     unsigned char *v = u + 1;
 
-    fill420(y, u, v, 2, 0, VID_WIDTH, VID_HEIGHT, VID_WIDTH, rgbvalue);
+    if (!file) {
+	fill420(y, u, v, 2, 0, VID_WIDTH, VID_HEIGHT, VID_WIDTH, rgbvalue);
+    } else {
+	    FILE *fp = fopen(file, "rb");
+	    int n = 0;
+
+	    if (!fp) {
+		    printf("cannot open file : %s\n", file);
+		    exit(1);
+	    }
+	    n = fread(buf, VID_SIZE, 1, fp);
+	    fclose(fp);
+
+	    printf("Read %d bytes from file %s\n", n, file);
+    }
 }
 
 
@@ -592,6 +607,7 @@ void printEGLConfiguration(EGLDisplay dpy, EGLConfig config) {
 }
 
 #define NUM_BUFS (3)
+char *file = NULL;
 
 int main(int argc, char** argv) {
 	static const EGLint attribs[] = {
@@ -623,10 +639,18 @@ int main(int argc, char** argv) {
 	struct drm_fb *fb;
 	int ret;
 
+	VID_SIZE = (VID_WIDTH * VID_HEIGHT * 3) / 2;
+
+	if (argc > 1) {
+		file = argv[1];
+		VID_WIDTH = atoi(argv[2]);
+		VID_HEIGHT = atoi(argv[3]);
+	}
+
 	unsigned char *buf = (unsigned char *)malloc(VID_SIZE + PAGE_SIZE);
 	buf = (unsigned char *)((uint32_t)buf & ~(PAGE_SIZE - 1));
 
-	setupYuvBuffer(buf, 0x0000FF);
+	setupYuvBuffer(buf, file, 0x0000FF);
 
 	ret = init_drm();
 	if (ret) {
