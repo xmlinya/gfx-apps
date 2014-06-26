@@ -658,13 +658,13 @@ int main(int argc, char** argv) {
 	struct drm_fb *fb;
 	int ret;
 
-	VID_SIZE = (VID_WIDTH * VID_HEIGHT * 3) / 2;
-
 	if (argc > 1) {
 		file = argv[1];
 		VID_WIDTH = atoi(argv[2]);
 		VID_HEIGHT = atoi(argv[3]);
 	}
+
+	VID_SIZE = (VID_WIDTH * VID_HEIGHT * 3) / 2;
 
 	unsigned char *buf = (unsigned char *)malloc(VID_SIZE + PAGE_SIZE);
 	buf = (unsigned char *)((uint32_t)buf & ~(PAGE_SIZE - 1));
