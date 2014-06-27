@@ -36,6 +36,7 @@
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define MAX_DISPLAYS 	(4)
+#define MAX_TILES	(4)
 uint8_t DISP_ID = 0;
 uint8_t all_display = 0;
 int8_t connector_id = -1;
@@ -390,7 +391,8 @@ int align(int x, int a) {
 	return (x + (a-1)) & (~(a-1));
 }
 
-static GLuint yuvTex;
+static GLuint yuvTex[MAX_TILES];
+static EGLImageKHR img[MAX_TILES];
 
 #define FOURCC(a, b, c, d) ((uint32_t)(uint8_t)(a) | ((uint32_t)(uint8_t)(b) << 8) | ((uint32_t)(uint8_t)(c) << 16) | ((uint32_t)(uint8_t)(d) << 24 ))
 #define FOURCC_STR(str)    FOURCC(str[0], str[1], str[2], str[3])
@@ -492,7 +494,7 @@ void setupYuvBuffer(unsigned char *buf, char *file, unsigned int rgbvalue)
 }
 
 
-bool setupYuvTexSurface(EGLDisplay dpy, EGLContext context, unsigned char *ptr) {
+bool setupYuvTexSurface(EGLDisplay dpy, EGLContext context, unsigned char *ptr, int index) {
     EGLint attr[] = {
             EGL_GL_VIDEO_FOURCC_TI,      FOURCC_STR("NV12"),
             EGL_GL_VIDEO_WIDTH_TI,       VID_WIDTH,
@@ -510,30 +512,54 @@ bool setupYuvTexSurface(EGLDisplay dpy, EGLContext context, unsigned char *ptr) 
     PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES =
             (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
 
-    EGLImageKHR img = eglCreateImageKHR(dpy, EGL_NO_CONTEXT, EGL_RAW_VIDEO_TI, ptr, attr);
+    img[index] = eglCreateImageKHR(dpy, EGL_NO_CONTEXT, EGL_RAW_VIDEO_TI, ptr, attr);
     checkEglError("eglCreateImageKHR");
-    if (img == EGL_NO_IMAGE_KHR) {
+    if (img[index] == EGL_NO_IMAGE_KHR) {
         printf("eglCreateImageKHR failed\n");
         return false;
     }
 
-    glGenTextures(1, &yuvTex);
+    glGenTextures(1, &yuvTex[index]);
     checkGlError("glGenTextures");
-    glBindTexture(GL_TEXTURE_EXTERNAL_OES, yuvTex);
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES, yuvTex[index]);
     checkGlError("glBindTexture");
     glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     checkGlError("glTexParameteri");
-    glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, (GLeglImageOES)img);
+    glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, (GLeglImageOES)img[index]);
     checkGlError("glEGLImageTargetTexture2DOES");
 
     return true;
 }
 
-const GLfloat gTriangleVertices[] = {
+const GLfloat gTriangleVertices_fullscreen[] = {
 		-1.0f, 1.0f, 0.0f,
 		-1.0f, -1.0f, 0.0f,
 		1.0f, -1.0f, 0.0f,
+		1.0f, 1.0f, 0.0f
+};
+const GLfloat gTriangleVertices_topleft[] = {
+		-1.0f, 1.0f, 0.0f,
+		-1.0f, 0.0f, 0.0f,
+		0.0f, 0.0f, 0.0f,
+		0.0f, 1.0f, 0.0f
+};
+const GLfloat gTriangleVertices_bottomleft[] = {
+		-1.0f, 0.0f, 0.0f,
+		-1.0f, -1.0f, 0.0f,
+		0.0f, -1.0f, 0.0f,
+		0.0f, 0.0f, 0.0f
+};
+const GLfloat gTriangleVertices_bottomright[] = {
+		0.0f, 0.0f, 0.0f,
+		0.0f, -1.0f, 0.0f,
+		1.0f, -1.0f, 0.0f,
+		1.0f, 0.0f, 0.0f
+};
+const GLfloat gTriangleVertices_topright[] = {
+		0.0f, 1.0f, 0.0f,
+		0.0f, 0.0f, 0.0f,
+		1.0f, 0.0f, 0.0f,
 		1.0f, 1.0f, 0.0f
 };
 const GLfloat gTexCoords[] = {
@@ -543,28 +569,20 @@ const GLfloat gTexCoords[] = {
 		1.0f, 0.0f,
 };
 
-void renderFrame() {
-	glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
-	checkGlError("glClearColor");
-	glClear( GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
-	checkGlError("glClear");
-
-	glUseProgram(gProgram);
-	checkGlError("glUseProgram");
-
-	glVertexAttribPointer(gvPositionHandle, 3, GL_FLOAT, GL_FALSE, 0, gTriangleVertices);
+void renderFrame(const GLfloat *vertices, const GLfloat *texcoords, const GLuint tex) {
+	glVertexAttribPointer(gvPositionHandle, 3, GL_FLOAT, GL_FALSE, 0, vertices);
 	checkGlError("glVertexAttribPointer");
 	glEnableVertexAttribArray(gvPositionHandle);
 	checkGlError("glEnableVertexAttribArray");
 
-	glVertexAttribPointer(gvTexHandle, 2, GL_FLOAT, GL_FALSE, 0, gTexCoords);
+	glVertexAttribPointer(gvTexHandle, 2, GL_FLOAT, GL_FALSE, 0, texcoords);
 	checkGlError("glVertexAttribPointer");
 	glEnableVertexAttribArray(gvTexHandle);
 	checkGlError("glEnableVertexAttribArray");
 
 	glUniform1i(gYuvTexSamplerHandle, 0);
 	checkGlError("glUniform1i");
-	glBindTexture(GL_TEXTURE_EXTERNAL_OES, yuvTex);
+	glBindTexture(GL_TEXTURE_EXTERNAL_OES, tex);
 	checkGlError("glBindTexture");
 
 	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
@@ -665,11 +683,8 @@ int main(int argc, char** argv) {
 	}
 
 	VID_SIZE = (VID_WIDTH * VID_HEIGHT * 3) / 2;
-
-	unsigned char *buf = (unsigned char *)malloc(VID_SIZE + PAGE_SIZE);
-	buf = (unsigned char *)((uint32_t)buf & ~(PAGE_SIZE - 1));
-
-	setupYuvBuffer(buf, file, 0x0000FF);
+	
+	unsigned char *buf[MAX_TILES];
 
 	ret = init_drm();
 	if (ret) {
@@ -744,9 +759,22 @@ int main(int argc, char** argv) {
 	printGLString("Renderer", GL_RENDERER);
 	printGLString("Extensions", GL_EXTENSIONS);
 
-	if(!setupYuvTexSurface(edpy, context, buf)) {
-		fprintf(stderr, "Could not set up texture surface.\n");
-		return 1;
+	unsigned int color = 0xff;
+	for (int i=0; i<MAX_TILES; i++) {
+		buf[i] = (unsigned char *)malloc(VID_SIZE + PAGE_SIZE);
+		buf[i] = (unsigned char *)((uint32_t)buf[i] & ~(PAGE_SIZE - 1));
+
+		if (i==0)
+			setupYuvBuffer(buf[i], file, 0x0000FF);
+		else {
+			setupYuvBuffer(buf[i], NULL, color);
+			color <<= 8;
+		}
+
+		if(!setupYuvTexSurface(edpy, context, buf[i], i)) {
+			fprintf(stderr, "Could not set up texture surface.\n");
+			return 1;
+		}
 	}
 
 	if(!setupGraphics(w, h)) {
@@ -768,11 +796,23 @@ int main(int argc, char** argv) {
 		return ret;
 	}
 
+	glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+	checkGlError("glClearColor");
+	glClear( GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+	checkGlError("glClear");
+
+	glUseProgram(gProgram);
+	checkGlError("glUseProgram");
+
 	for (;;) {
 		struct gbm_bo *next_bo;
 		int waiting_for_flip = 1;
 
-		renderFrame();
+		renderFrame(gTriangleVertices_topleft, gTexCoords, yuvTex[0]);
+		renderFrame(gTriangleVertices_bottomleft, gTexCoords, yuvTex[1]);
+		renderFrame(gTriangleVertices_bottomright, gTexCoords, yuvTex[2]);
+		renderFrame(gTriangleVertices_topright, gTexCoords, yuvTex[3]);
+
 		eglSwapBuffers(edpy, surface);
 		checkEglError("eglSwapBuffers");
 
