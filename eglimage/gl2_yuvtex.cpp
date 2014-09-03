@@ -762,7 +762,7 @@ int main(int argc, char** argv) {
 	unsigned int color = 0xff;
 	for (int i=0; i<MAX_TILES; i++) {
 		buf[i] = (unsigned char *)malloc(VID_SIZE + PAGE_SIZE);
-		buf[i] = (unsigned char *)((uint32_t)buf[i] & ~(PAGE_SIZE - 1));
+		buf[i] = (unsigned char *)(((uint32_t)buf[i] + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
 
 		if (i==0)
 			setupYuvBuffer(buf[i], file, 0x0000FF);
