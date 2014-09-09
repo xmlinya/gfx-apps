@@ -267,12 +267,16 @@ static void checkGlError(const char* op) {
 }
 
 static const char gVertexShader[] =
+        "#extension GL_OES_EGL_image_external : require\n"
         "attribute vec4 vPosition;\n"
 	"attribute vec2 texCoords;\n"
+		"uniform samplerExternalOES yuvTexSampler;\n"
 		"varying vec2 yuvTexCoords;\n"
+		"varying vec4 color;\n"
 		"void main() {\n"
 		"  yuvTexCoords = texCoords;\n"
 		"  gl_Position = vPosition;\n"
+		"  color = texture2D(yuvTexSampler, yuvTexCoords);\n"
 		"}\n";
 
 static const char gFragmentShader[] =
@@ -280,8 +284,9 @@ static const char gFragmentShader[] =
 		"precision mediump float;\n"
 		"uniform samplerExternalOES yuvTexSampler;\n"
 		"varying vec2 yuvTexCoords;\n"
+		"varying vec4 color;\n"
 		"void main() {\n"
-		"  gl_FragColor = texture2D(yuvTexSampler, yuvTexCoords);\n"
+		"  gl_FragColor = color;\n"
 		"}\n";
 
 GLuint loadShader(GLenum shaderType, const char* pSource) {
