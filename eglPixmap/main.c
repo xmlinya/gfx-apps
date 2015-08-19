@@ -30,6 +30,7 @@
 #include <stdbool.h>
 #include <gbm/gbm.h>
 #include <EGL/egl.h>
+#include <EGL/eglext.h>
 #include <GLES2/gl2.h>
 #include <signal.h>
 #include <sys/mman.h>
@@ -41,6 +42,11 @@
 
 #define HDISPLAYSIZE (640)
 #define VDISPLAYSIZE (480)
+
+EGLSyncKHR (*eglCreateSyncKHR)(EGLDisplay dpy, EGLenum type, const EGLint *attrib_list);
+EGLBoolean (*eglDestroySyncKHR)(EGLDisplay dpy, EGLSyncKHR sync);
+EGLint (*eglClientWaitSyncKHR)(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags, EGLTimeKHR timeout);
+EGLBoolean (*eglGetSyncAttribKHR)(EGLDisplay dpy, EGLSyncKHR sync, EGLint attribute, EGLint *value);
 
 int outfile;
 
@@ -237,6 +243,22 @@ static int init_gl(void)
 
 	/* connect the context to the surface */
 	eglMakeCurrent(gl.display, gl.surface, gl.surface, gl.context);
+	
+#define GET_EGL_GL_FP(name) do { if (! (name = (void*) eglGetProcAddress(#name))) { \
+              fprintf(stderr, "Could not getProcAddress of " #name "!"); abort(); } } while(0)
+
+        char const *extensions = eglQueryString(gl.display, EGL_EXTENSIONS);
+
+        if (strstr(extensions, "EGL_KHR_fence_sync"))
+        {
+           fprintf(stderr, "using EGL_KHR_fence_sync extension\n");
+           GET_EGL_GL_FP(eglCreateSyncKHR);
+           GET_EGL_GL_FP(eglDestroySyncKHR);
+           GET_EGL_GL_FP(eglClientWaitSyncKHR);
+           GET_EGL_GL_FP(eglGetSyncAttribKHR);
+        }
+
+#undef GET_EGL_GL_FP
 
 	gl.fragment_shader = create_shader(frag_shader_text, GL_FRAGMENT_SHADER);
 	gl.vertex_shader = create_shader(vert_shader_text, GL_VERTEX_SHADER);
@@ -307,6 +329,7 @@ void cleanup_kmscube(void)
 
 static void draw(uint32_t i)
 {
+	int ret;
 	static const GLfloat verts[3][2] = {
 		{ -0.5, -0.5},
 		{  0.5, -0.5},
@@ -342,10 +365,29 @@ static void draw(uint32_t i)
 	glVertexAttribPointer(gl.coloroffset, 3, GL_FLOAT, GL_FALSE, 0, colors);
 
 	glDrawArrays(GL_TRIANGLES, 0, 3);
-	eglWaitGL();
 
-	//glDisableVertexAttribArray(gl.positionoffset);
-	//glDisableVertexAttribArray(gl.coloroffset);
+	EGLSyncKHR sync;
+	if (eglCreateSyncKHR)
+	{
+		sync = eglCreateSyncKHR(gl.display, EGL_SYNC_FENCE_KHR, NULL);
+	}
+	if(sync != EGL_NO_SYNC_KHR) {
+		ret = eglClientWaitSyncKHR(gl.display, sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 1000 * 1000 * 32);
+		if (ret == EGL_TIMEOUT_EXPIRED_KHR)
+		{
+			fprintf(stderr, "wait for egl sync timed out\n");
+		}
+		else if (ret != EGL_CONDITION_SATISFIED_KHR)
+		{
+			fprintf(stderr, "failed to wait for egl sync: %x\n", eglGetError());
+		}
+
+		if (!eglDestroySyncKHR(gl.display, sync))
+		{
+			fprintf(stderr, "error at eglDestroySyncKHR: %x\n", eglGetError());
+		}
+	}
+//	eglWaitGL();
 
 }
 
