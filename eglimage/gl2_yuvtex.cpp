@@ -23,8 +23,6 @@
 #include <time.h>
 #include <errno.h>
 #include <sched.h>
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
