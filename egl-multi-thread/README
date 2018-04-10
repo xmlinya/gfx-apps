@@ -1,0 +1,18 @@
+**************
+Build Instructions
+**************
+
+# Mount target file system on host
+# Set FSDIR to the target file system in Makefile
+
+# Include 4.9 cross compiler in the PATH
+export PATH=<4.9_CROSS_COMPILER>/bin:$PATH
+export FSDIR=<TARGETFS_PATH>
+
+#if the application is to be a wayland-client, then export the following as well
+#export BUILD_WAYLAND=yes
+
+make
+sudo -E make install
+
+# egl_multi_layer_{wayland/drm} will be installed to /home/root on target fs
