@@ -1,0 +1,14 @@
+This repository contains some reference applications for Graphics. This is
+provided on an as-is-where-is basis without any support.
+
+This repo contains standalone apps that show how to use certain Graphics
+features. We have other repositories that contain system level applications
+which are integrated with other IPs or SW frameworks.
+http://git.ti.com/glsdk/example-applications
+http://git.ti.com/glsdk/omapdrmtest
+
+When the Graphics features are integrated into system level applications, the
+corresponding standalone test applications in this repository are deleted.
+
+In short, don't expect any maintenance or support for applications in this
+repository. They can very well disappear someday.
