@@ -16,8 +16,8 @@
 int CONNECTOR_ID = (24);
 #endif
 
-#define FRAME_W (960)
-#define FRAME_H (540)
+#define FRAME_W (1280) /* should mach your fullscreen size maybe 1920*1080 */
+#define FRAME_H (720)  /* my fullscreen size is 1280*720 */
 
 #define MAX_NUM_THREADS (8)
 
@@ -123,7 +123,15 @@ int main(int argc, char **argv)
 
 	for(count = 0; count < num_threads; count++) {
 #ifndef USE_WAYLAND
-		struct plane_data *pdata = get_new_surface(dev, count * FRAME_W, count * FRAME_H, FRAME_W, FRAME_H);
+	/* Ignore overlap issue. 
+	 * We just want to test GBM surface init with double instance and fullscreen.  
+	 * Make sure, It's create more than one gbm surface instance.
+	 */
+		printf("start create gbm surface %d\n", count);
+		struct plane_data *pdata = get_new_surface(dev, 0, 0, FRAME_W, FRAME_H); 	
+	/*I always encounter this problem 
+	* The error message is:  Failed to allocate DBM buffer: Cannot allocate memory
+	*/
 #else
 		struct wayland_window_data *pdata = get_new_surface(dev, count * FRAME_W, count * FRAME_H, FRAME_W, FRAME_H);
 #endif
